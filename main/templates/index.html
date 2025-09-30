@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shikshakhel - AI Learning Platform</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="stars"></div>
+    <div class="twinkling"></div>
+    
+    <div class="container">
+        <header>
+            <h1>🚀 Shikshakhel</h1>
+            <p>AI-Powered Learning Adventure</p>
+        </header>
+        
+        <main>
+            <section class="hero">
+                <h2>Embark on an Educational Journey Through Space</h2>
+                <p>Join Nova, your AI assistant, in exploring 12 exciting educational games designed to make learning fun!</p>
+                <a href="/app" class="cta-button">Start Learning</a>
+            </section>
+            
+            <section class="games-preview">
+                <h2>Educational Games</h2>
+                <div class="games-grid">
+                    <div class="game-item">
+                        <h3>🐍 Alphabet Snake</h3>
+                        <p>Catch alphabets to form words and grow your snake!</p>
+                    </div>
+                    <div class="game-item">
+                        <h3>🎯 Color Target</h3>
+                        <p>Improve reaction time and color recognition skills!</p>
+                    </div>
+                    <div class="game-item">
+                        <h3>🎤 Voice Challenge</h3>
+                        <p>Practice voice commands and pronunciation!</p>
+                    </div>
+                    <!-- More game items -->
+                </div>
+            </section>
+        </main>
+        
+        <footer>
+            <p>&copy; 2023 Shikshakhel - AI Learning Platform</p>
+        </footer>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+</body>
+</html>

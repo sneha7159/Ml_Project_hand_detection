@@ -1,0 +1,310 @@
+/* Space-themed CSS */
+body {
+    background-color: #0a0a2a;
+    color: #ffffff;
+    font-family: 'Arial', sans-serif;
+    background-image: 
+        radial-gradient(white, rgba(255,255,255,.2) 2px, transparent 10px),
+        radial-gradient(white, rgba(255,255,255,.15) 1px, transparent 5px),
+        radial-gradient(white, rgba(255,255,255,.1) 2px, transparent 10px);
+    background-size: 550px 550px, 350px 350px, 250px 250px;
+    background-position: 0 0, 40px 60px, 130px 270px;
+}
+
+.stars, .twinkling {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.stars {
+    background: #000 url('http://www.script-tutorials.com/demos/360/images/stars.png') repeat top center;
+    z-index: -3;
+}
+
+.twinkling {
+    background: transparent url('http://www.script-tutorials.com/demos/360/images/twinkling.png') repeat top center;
+    z-index: -2;
+    animation: move-twink-back 200s linear infinite;
+}
+
+@keyframes move-twink-back {
+    from {background-position: 0 0;}
+    to {background-position: -10000px 5000px;}
+}
+
+.landing-container {
+    text-align: center;
+    padding: 100px 20px;
+    position: relative;
+    z-index: 1;
+}
+
+.landing-container h1 {
+    font-size: 4rem;
+    margin-bottom: 20px;
+    color: #4fc3f7;
+    text-shadow: 0 0 10px #4fc3f7, 0 0 20px #4fc3f7;
+}
+
+.landing-container h2 {
+    font-size: 2rem;
+    margin-bottom: 30px;
+    color: #b388ff;
+}
+
+.landing-container p {
+    font-size: 1.2rem;
+    max-width: 600px;
+    margin: 0 auto 40px;
+    line-height: 1.6;
+}
+
+.game-card {
+    background: rgba(25, 25, 55, 0.8);
+    border: 1px solid #448aff;
+    border-radius: 10px;
+    padding: 20px;
+    margin: 10px 0;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.5);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.game-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 8px 16px rgba(68, 138, 255, 0.3);
+}
+
+.game-card h3 {
+    color: #82b1ff;
+    margin-top: 0;
+}
+
+/* Button styles */
+.stButton > button {
+    background: linear-gradient(45deg, #2196f3, #1976d2);
+    color: white;
+    border: none;
+    border-radius: 20px;
+    padding: 10px 20px;
+    font-weight: bold;
+    transition: all 0.3s ease;
+}
+
+.stButton > button:hover {
+    background: linear-gradient(45deg, #1976d2, #0d47a1);
+    box-shadow: 0 0 15px rgba(33, 150, 243, 0.5);
+}
+
+/* Sidebar styles */
+.css-1d391kg, .css-1v0mbdj {
+    background: rgba(15, 15, 35, 0.95) !important;
+    border-right: 1px solid #448aff;
+}
+
+/* Metric cards */
+.stMetric {
+    background: rgba(25, 25, 55, 0.8);
+    border: 1px solid #448aff;
+    border-radius: 10px;
+    padding: 15px;
+    text-align: center;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(10, 10, 30, 0.5);
+}
+
+::-webkit-scrollbar-thumb {
+    background: #448aff;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #2979ff;
+}
+/* Game-specific styles */
+.game-container {
+    background: rgba(15, 15, 35, 0.8);
+    border: 2px solid #448aff;
+    border-radius: 15px;
+    padding: 20px;
+    margin: 20px 0;
+    box-shadow: 0 0 30px rgba(68, 138, 255, 0.3);
+}
+
+.canvas-container {
+    position: relative;
+    width: 100%;
+    height: 400px;
+    background-color: white;
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+#drawing-canvas {
+    width: 100%;
+    height: 100%;
+    cursor: crosshair;
+}
+
+.draggable {
+    padding: 10px 15px;
+    background: linear-gradient(45deg, #2196f3, #1976d2);
+    color: white;
+    border-radius: 20px;
+    margin: 5px;
+    cursor: grab;
+    user-select: none;
+    transition: all 0.3s ease;
+}
+
+.draggable:hover {
+    transform: scale(1.05);
+    box-shadow: 0 0 15px rgba(33, 150, 243, 0.5);
+}
+
+.draggable.dragging {
+    opacity: 0.5;
+}
+
+.drop-zone {
+    min-height: 100px;
+    border: 2px dashed #448aff;
+    border-radius: 10px;
+    padding: 15px;
+    margin: 10px 0;
+    transition: all 0.3s ease;
+}
+
+.drop-zone.drag-over {
+    background-color: rgba(68, 138, 255, 0.2);
+    border-color: #ffeb3b;
+}
+
+.drop-zone .dropped {
+    cursor: default;
+}
+
+/* Rhythm game styles */
+.rhythm-indicator {
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    margin: 0 auto;
+    transition: all 0.3s ease;
+}
+
+.rhythm-active {
+    background-color: #4caf50;
+    box-shadow: 0 0 30px #4caf50;
+}
+
+.rhythm-inactive {
+    background-color: #f44336;
+}
+
+.rhythm-ready {
+    background-color: #ffeb3b;
+}
+
+/* Puzzle game styles */
+.puzzle-container {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    padding: 20px;
+    margin: 15px 0;
+}
+
+.puzzle-image {
+    max-width: 100%;
+    border-radius: 10px;
+    margin: 15px 0;
+}
+
+.hint-box {
+    background: rgba(255, 193, 7, 0.2);
+    border-left: 4px solid #ffc107;
+    padding: 10px 15px;
+    margin: 10px 0;
+    border-radius: 0 5px 5px 0;
+}
+
+/* Animation for correct answers */
+@keyframes celebrate {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+    100% { transform: scale(1); }
+}
+
+.correct-answer {
+    animation: celebrate 0.5s ease;
+    color: #4caf50;
+}
+
+/* Planet animations */
+.planet {
+    position: absolute;
+    border-radius: 50%;
+}
+
+.orbit {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 50%;
+    animation: orbit linear infinite;
+}
+
+@keyframes orbit {
+    from { transform: translate(-50%, -50%) rotate(0deg); }
+    to { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+/* Shooting star animation */
+.shooting-star {
+    position: absolute;
+    background: white;
+    border-radius: 50%;
+    animation: shoot linear;
+}
+
+@keyframes shoot {
+    from {
+        transform: translate(0, 0);
+        opacity: 1;
+    }
+    to {
+        transform: translate(-100px, 100px);
+        opacity: 0;
+    }
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .game-container {
+        padding: 15px;
+        margin: 10px 0;
+    }
+    
+    .canvas-container {
+        height: 300px;
+    }
+    
+    .rhythm-indicator {
+        width: 80px;
+        height: 80px;
+    }
+}
