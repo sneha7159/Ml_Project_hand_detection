@@ -1,1040 +1,475 @@
-# main.py
-import streamlit as st
-import sqlite3
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime
-import json
-import time
-import random
-import os
-from pathlib import Path
-import hashlib
-import base64
-import math
-from PIL import Image
-import io
 import cv2
-from streamlit_drawable_canvas import st_canvas
+import numpy as np
+import mediapipe as mp
+import matplotlib.pyplot as plt
+import pandas as pd
+from sklearn.manifold import TSNE
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+import seaborn as sns
+import tkinter as tk
+from tkinter import ttk, messagebox
+from PIL import Image, ImageTk
+import time
+import threading
+from collections import deque
+import random
 
-# Set page configuration
-st.set_page_config(
-    page_title="Rural EduGame Platform",
-    page_icon="🎓",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Database setup
-def init_db():
-    conn = sqlite3.connect('edu_game.db')
-    c = conn.cursor()
-    
-    # Create users table
-    c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  username TEXT UNIQUE,
-                  password TEXT,
-                  user_type TEXT,
-                  grade INTEGER,
-                  school TEXT,
-                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
-    
-    # Create game progress table
-    c.execute('''CREATE TABLE IF NOT EXISTS game_progress
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  user_id INTEGER,
-                  game_name TEXT,
-                  subject TEXT,
-                  score INTEGER,
-                  level INTEGER,
-                  time_spent INTEGER,
-                  completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                  FOREIGN KEY (user_id) REFERENCES users (id))''')
-    
-    # Create analytics table
-    c.execute('''CREATE TABLE IF NOT EXISTS analytics
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  user_id INTEGER,
-                  date TEXT,
-                  engagement_score INTEGER,
-                  improvement_rate REAL,
-                  FOREIGN KEY (user_id) REFERENCES users (id))''')
-    
-    conn.commit()
-    conn.close()
-
-# Initialize database
-init_db()
-
-# User authentication functions
-def create_user(username, password, user_type, grade, school):
-    conn = sqlite3.connect('edu_game.db')
-    c = conn.cursor()
-    hashed_password = hashlib.sha256(password.encode()).hexdigest()
-    try:
-        c.execute("INSERT INTO users (username, password, user_type, grade, school) VALUES (?, ?, ?, ?, ?)",
-                  (username, hashed_password, user_type, grade, school))
-        conn.commit()
-        conn.close()
-        return True
-    except:
-        conn.close()
-        return False
-
-def verify_user(username, password):
-    conn = sqlite3.connect('edu_game.db')
-    c = conn.cursor()
-    hashed_password = hashlib.sha256(password.encode()).hexdigest()
-    c.execute("SELECT * FROM users WHERE username = ? AND password = ?", (username, hashed_password))
-    user = c.fetchone()
-    conn.close()
-    return user
-
-# Game classes
-class CircuitBuilder:
-    def __init__(self, grade_level):
-        self.grade_level = grade_level
-        self.components = self.generate_components()
-        self.correct_circuit = self.generate_correct_circuit()
-        self.user_circuit = []
+class HandDetectionGame:
+    def __init__(self):
+        # Initialize MediaPipe Hands
+        self.mp_hands = mp.solutions.hands
+        self.mp_drawing = mp.solutions.drawing_utils
+        self.mp_drawing_styles = mp.solutions.drawing_styles
+        
+        self.hands = self.mp_hands.Hands(
+            static_image_mode=False,
+            max_num_hands=2,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        )
+        
+        # Game variables
         self.score = 0
-        self.dragged_component = None
+        self.game_time = 60  # seconds
+        self.start_time = None
+        self.is_running = False
+        self.targets = []
+        self.hand_data = []
+        self.cap = None
         
-    def generate_components(self):
-        return [
-            {"id": "battery", "name": "Battery", "image": "🔋", "description": "Power source for the circuit"},
-            {"id": "bulb", "name": "Light Bulb", "image": "💡", "description": "Lights up when current flows"},
-            {"id": "switch", "name": "Switch", "image": "🔘", "description": "Controls current flow (on/off)"},
-            {"id": "resistor", "name": "Resistor", "image": "📏", "description": "Limits current flow"},
-            {"id": "wire", "name": "Wire", "image": "➖", "description": "Connects components"}
-        ]
-    
-    def generate_correct_circuit(self):
-        if self.grade_level <= 8:
-            return ["battery", "wire", "switch", "wire", "bulb", "wire", "battery"]
-        else:
-            return ["battery", "wire", "resistor", "wire", "switch", "wire", "bulb", "wire", "battery"]
-    
-    def add_component(self, component_id):
-        self.user_circuit.append(component_id)
+        # Visualization data
+        self.landmark_history = deque(maxlen=100)
         
-    def check_circuit(self):
-        return self.user_circuit == self.correct_circuit
-    
-    def get_score(self):
-        if self.check_circuit():
-            self.score = 100
-        else:
-            # Partial credit based on how many components are in correct position
-            correct_positions = sum(1 for i, comp in enumerate(self.user_circuit) 
-                                  if i < len(self.correct_circuit) and comp == self.correct_circuit[i])
-            self.score = int((correct_positions / len(self.correct_circuit)) * 100)
-        return self.score
-
-class PhysicsLab:
-    def __init__(self, grade_level):
-        self.grade_level = grade_level
-        self.equipment = self.generate_equipment()
-        self.experiments = self.generate_experiments()
-        self.current_experiment = 0
-        self.user_setup = []
+        # Create main window
+        self.root = tk.Tk()
+        self.root.title("Hand Detection Game - AI Analytics")
+        self.root.geometry("1400x900")
+        self.root.configure(bg='#2c3e50')
+        
+        self.setup_ui()
+        
+    def setup_ui(self):
+        # Main frame
+        main_frame = ttk.Frame(self.root)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Left panel - Camera and Game
+        left_frame = ttk.Frame(main_frame)
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Camera display
+        self.camera_label = ttk.Label(left_frame, background='black')
+        self.camera_label.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Game info
+        info_frame = ttk.Frame(left_frame)
+        info_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        self.score_label = ttk.Label(info_frame, text="Score: 0", font=('Arial', 14))
+        self.score_label.pack(side=tk.LEFT, padx=10)
+        
+        self.time_label = ttk.Label(info_frame, text="Time: 60s", font=('Arial', 14))
+        self.time_label.pack(side=tk.LEFT, padx=10)
+        
+        # Control buttons
+        control_frame = ttk.Frame(left_frame)
+        control_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        self.start_btn = ttk.Button(control_frame, text="Start Game", command=self.start_game)
+        self.start_btn.pack(side=tk.LEFT, padx=5)
+        
+        self.stop_btn = ttk.Button(control_frame, text="Stop", command=self.stop_game, state=tk.DISABLED)
+        self.stop_btn.pack(side=tk.LEFT, padx=5)
+        
+        self.visualize_btn = ttk.Button(control_frame, text="Show Analytics", command=self.show_analytics)
+        self.visualize_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Right panel - Analytics
+        right_frame = ttk.Frame(main_frame)
+        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+        
+        # Create notebook for tabs
+        self.notebook = ttk.Notebook(right_frame)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
+        
+        # Real-time data tab
+        self.realtime_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.realtime_tab, text="Real-time Data")
+        
+        # Analytics tab
+        self.analytics_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.analytics_tab, text="Advanced Analytics")
+        
+        # Setup real-time plots
+        self.setup_realtime_plots()
+        
+    def setup_realtime_plots(self):
+        # Create matplotlib figures for real-time data
+        self.realtime_fig, ((self.ax1, self.ax2), (self.ax3, self.ax4)) = plt.subplots(2, 2, figsize=(10, 8))
+        self.realtime_fig.tight_layout(pad=3.0)
+        
+        # Embed in tkinter
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+        self.realtime_canvas = FigureCanvasTkAgg(self.realtime_fig, master=self.realtime_tab)
+        self.realtime_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
+    def start_game(self):
+        if self.cap is None:
+            self.cap = cv2.VideoCapture(0)
+            if not self.cap.isOpened():
+                messagebox.showerror("Error", "Cannot open camera")
+                return
+        
         self.score = 0
+        self.game_time = 60
+        self.start_time = time.time()
+        self.is_running = True
+        self.targets = []
+        self.hand_data = []
+        self.landmark_history.clear()
         
-    def generate_equipment(self):
-        return [
-            {"id": "spring", "name": "Spring", "image": "🔄", "description": "Measures force and extension"},
-            {"id": "weights", "name": "Weights", "image": "⚖️", "description": "Standard masses for experiments"},
-            {"id": "pendulum", "name": "Pendulum", "image": "⏲️", "description": "For timing oscillations"},
-            {"id": "lens", "name": "Convex Lens", "image": "🔍", "description": "Focuses light rays"},
-            {"id": "prism", "name": "Prism", "image": "🌈", "description": "Splits light into spectrum"},
-            {"id": "magnet", "name": "Magnet", "image": "🧲", "description": "Creates magnetic field"}
-        ]
-    
-    def generate_experiments(self):
-        if self.grade_level <= 8:
-            return [
-                {
-                    "name": "Hooke's Law Experiment",
-                    "description": "Set up equipment to verify Hooke's Law: F = kx",
-                    "correct_setup": ["spring", "weights", "weights", "weights"]
-                },
-                {
-                    "name": "Simple Pendulum",
-                    "description": "Set up a simple pendulum to measure time period",
-                    "correct_setup": ["pendulum", "weights"]
-                }
-            ]
-        else:
-            return [
-                {
-                    "name": "Light Refraction",
-                    "description": "Set up equipment to demonstrate light refraction through a prism",
-                    "correct_setup": ["lens", "prism"]
-                },
-                {
-                    "name": "Magnetic Field Mapping",
-                    "description": "Set up equipment to map magnetic field lines",
-                    "correct_setup": ["magnet", "magnet"]
-                }
-            ]
-    
-    def add_equipment(self, equipment_id):
-        self.user_setup.append(equipment_id)
-    
-    def check_setup(self):
-        return sorted(self.user_setup) == sorted(self.experiments[self.current_experiment]["correct_setup"])
-    
-    def get_score(self):
-        if self.check_setup():
-            self.score = 100
-        else:
-            # Calculate partial score
-            correct_items = sum(1 for item in self.user_setup 
-                              if item in self.experiments[self.current_experiment]["correct_setup"])
-            total_items = len(self.experiments[self.current_experiment]["correct_setup"])
-            self.score = int((correct_items / total_items) * 100)
-        return self.score
-    
-    def next_experiment(self):
-        if self.current_experiment < len(self.experiments) - 1:
-            self.current_experiment += 1
-            self.user_setup = []
-            return True
-        return False
-
-class ChemistryLab:
-    def __init__(self, grade_level):
-        self.grade_level = grade_level
-        self.elements = self.generate_elements()
-        self.compounds = self.generate_compounds()
-        self.current_reaction = 0
-        self.user_elements = []
-        self.score = 0
+        self.start_btn.config(state=tk.DISABLED)
+        self.stop_btn.config(state=tk.NORMAL)
+        self.update_score_display()
         
-    def generate_elements(self):
-        return [
-            {"id": "H", "name": "Hydrogen", "image": "⚪", "description": "Atomic number 1"},
-            {"id": "O", "name": "Oxygen", "image": "🔴", "description": "Atomic number 8"},
-            {"id": "C", "name": "Carbon", "image": "⚫", "description": "Atomic number 6"},
-            {"id": "Na", "name": "Sodium", "image": "🟠", "description": "Atomic number 11"},
-            {"id": "Cl", "name": "Chlorine", "image": "🟢", "description": "Atomic number 17"}
-        ]
-    
-    def generate_compounds(self):
-        if self.grade_level <= 8:
-            return [
-                {
-                    "name": "Water Formation",
-                    "description": "Create water molecules from elements",
-                    "correct_formula": ["H", "H", "O"]
-                },
-                {
-                    "name": "Carbon Dioxide",
-                    "description": "Create carbon dioxide molecules",
-                    "correct_formula": ["C", "O", "O"]
-                }
-            ]
-        else:
-            return [
-                {
-                    "name": "Sodium Chloride",
-                    "description": "Create table salt molecules",
-                    "correct_formula": ["Na", "Cl"]
-                },
-                {
-                    "name": "Glucose",
-                    "description": "Create a glucose molecule",
-                    "correct_formula": ["C", "C", "C", "C", "C", "C", "H", "H", "H", "H", "H", "H", "O", "O", "O", "O", "O", "O"]
-                }
-            ]
-    
-    def add_element(self, element_id):
-        self.user_elements.append(element_id)
-    
-    def check_reaction(self):
-        return sorted(self.user_elements) == sorted(self.compounds[self.current_reaction]["correct_formula"])
-    
-    def get_score(self):
-        if self.check_reaction():
-            self.score = 100
-        else:
-            # Calculate partial score
-            correct_items = sum(1 for item in self.user_elements 
-                              if item in self.compounds[self.current_reaction]["correct_formula"])
-            total_items = len(self.compounds[self.current_reaction]["correct_formula"])
-            self.score = int((correct_items / total_items) * 100)
-        return self.score
-    
-    def next_reaction(self):
-        if self.current_reaction < len(self.compounds) - 1:
-            self.current_reaction += 1
-            self.user_elements = []
-            return True
-        return False
-
-class GeographyExplorer:
-    def __init__(self, grade_level):
-        self.grade_level = grade_level
-        self.countries = self.generate_countries()
-        self.capitals = self.generate_capitals()
-        self.landmarks = self.generate_landmarks()
-        self.current_mode = "countries"  # countries, capitals, or landmarks
-        self.user_answers = {}
-        self.score = 0
+        # Start game loop in separate thread
+        self.game_thread = threading.Thread(target=self.game_loop)
+        self.game_thread.daemon = True
+        self.game_thread.start()
         
-    def generate_countries(self):
-        return ["India", "United States", "Japan", "Brazil", "Egypt", 
-                "Australia", "Germany", "South Africa", "China", "Mexico"]
-    
-    def generate_capitals(self):
-        return {
-            "India": "New Delhi",
-            "United States": "Washington D.C.",
-            "Japan": "Tokyo",
-            "Brazil": "Brasília",
-            "Egypt": "Cairo",
-            "Australia": "Canberra",
-            "Germany": "Berlin",
-            "South Africa": "Pretoria",
-            "China": "Beijing",
-            "Mexico": "Mexico City"
-        }
-    
-    def generate_landmarks(self):
-        return {
-            "India": "Taj Mahal",
-            "United States": "Statue of Liberty",
-            "Japan": "Mount Fuji",
-            "Brazil": "Christ the Redeemer",
-            "Egypt": "Pyramids of Giza",
-            "Australia": "Sydney Opera House",
-            "Germany": "Brandenburg Gate",
-            "South Africa": "Table Mountain",
-            "China": "Great Wall",
-            "Mexico": "Chichen Itza"
-        }
-    
-    def set_mode(self, mode):
-        self.current_mode = mode
-        self.user_answers = {}
-    
-    def add_answer(self, question, answer):
-        self.user_answers[question] = answer
-    
-    def check_answers(self):
-        if self.current_mode == "countries":
-            correct = 0
-            for country in self.countries:
-                if country in self.user_answers and self.user_answers[country] == self.capitals[country]:
-                    correct += 1
-            return correct / len(self.countries)
-        elif self.current_mode == "capitals":
-            correct = 0
-            for capital in self.capitals.values():
-                if capital in self.user_answers and self.user_answers[capital] in self.capitals and self.capitals[self.user_answers[capital]] == capital:
-                    correct += 1
-            return correct / len(self.capitals)
-        else:  # landmarks
-            correct = 0
-            for country, landmark in self.landmarks.items():
-                if country in self.user_answers and self.user_answers[country] == landmark:
-                    correct += 1
-            return correct / len(self.landmarks)
-    
-    def get_score(self):
-        accuracy = self.check_answers()
-        self.score = int(accuracy * 100)
-        return self.score
-
-class MathAdventure:
-    def __init__(self, grade_level):
-        self.grade_level = grade_level
-        self.problems = self.generate_problems()
-        self.current_problem = 0
-        self.user_answers = {}
-        self.score = 0
+        # Start countdown
+        self.update_timer()
         
-    def generate_problems(self):
-        if self.grade_level <= 8:
-            return [
-                {
-                    "question": "Solve for x: 2x + 5 = 15",
-                    "type": "algebra",
-                    "answer": "5",
-                    "hint": "Subtract 5 from both sides first"
-                },
-                {
-                    "question": "What is the area of a circle with radius 7cm?",
-                    "type": "geometry",
-                    "answer": "153.94",
-                    "hint": "Use the formula πr²"
-                },
-                {
-                    "question": "If a train travels 120 km in 2 hours, what is its speed?",
-                    "type": "word",
-                    "answer": "60",
-                    "hint": "Speed = Distance / Time"
-                }
-            ]
-        else:
-            return [
-                {
-                    "question": "Solve the quadratic equation: x² - 5x + 6 = 0",
-                    "type": "algebra",
-                    "answer": "2,3",
-                    "hint": "Factor the equation"
-                },
-                {
-                    "question": "Find the derivative of f(x) = 3x² + 2x - 5",
-                    "type": "calculus",
-                    "answer": "6x+2",
-                    "hint": "Use the power rule"
-                },
-                {
-                    "question": "What is the probability of getting a sum of 7 when rolling two dice?",
-                    "type": "statistics",
-                    "answer": "0.1667",
-                    "hint": "Count the favorable outcomes divided by total outcomes"
-                }
-            ]
+    def stop_game(self):
+        self.is_running = False
+        self.start_btn.config(state=tk.NORMAL)
+        self.stop_btn.config(state=tk.DISABLED)
+        
+    def update_timer(self):
+        if self.is_running:
+            elapsed = time.time() - self.start_time
+            remaining = max(0, self.game_time - int(elapsed))
+            self.time_label.config(text=f"Time: {remaining}s")
+            
+            if remaining <= 0:
+                self.stop_game()
+                messagebox.showinfo("Game Over", f"Game Over! Final Score: {self.score}")
+            else:
+                self.root.after(1000, self.update_timer)
     
-    def check_answer(self, answer):
-        correct_answer = self.problems[self.current_problem]["answer"]
-        # Allow for multiple formats of the same answer
-        if "," in correct_answer:
-            correct_answers = [a.strip() for a in correct_answer.split(",")]
-            user_answers = [a.strip() for a in answer.split(",")]
-            return sorted(user_answers) == sorted(correct_answers)
-        else:
-            return answer.strip() == correct_answer
+    def update_score_display(self):
+        self.score_label.config(text=f"Score: {self.score}")
     
-    def next_problem(self):
-        if self.current_problem < len(self.problems) - 1:
-            self.current_problem += 1
-            return True
+    def generate_target(self, frame_shape):
+        """Generate a new target circle"""
+        radius = 30
+        x = random.randint(radius, frame_shape[1] - radius)
+        y = random.randint(radius, frame_shape[0] - radius)
+        color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+        return {'x': x, 'y': y, 'radius': radius, 'color': color}
+    
+    def check_target_collision(self, hand_landmarks, frame_shape):
+        """Check if hand landmarks collide with any targets"""
+        if not hand_landmarks:
+            return False
+        
+        for target in self.targets[:]:
+            # Use index finger tip (landmark 8)
+            landmark = hand_landmarks.landmark[8]
+            x = int(landmark.x * frame_shape[1])
+            y = int(landmark.y * frame_shape[0])
+            
+            distance = np.sqrt((x - target['x'])**2 + (y - target['y'])**2)
+            
+            if distance < target['radius']:
+                self.targets.remove(target)
+                self.score += 1
+                self.update_score_display()
+                return True
         return False
     
-    def get_score(self):
-        correct = sum(1 for i in range(len(self.problems)) 
-                     if str(i) in self.user_answers and 
-                     self.check_answer(self.user_answers[str(i)]))
-        self.score = int((correct / len(self.problems)) * 100)
-        return self.score
-
-# Analytics functions
-def save_game_progress(user_id, game_name, subject, score, level, time_spent):
-    conn = sqlite3.connect('edu_game.db')
-    c = conn.cursor()
-    c.execute("INSERT INTO game_progress (user_id, game_name, subject, score, level, time_spent) VALUES (?, ?, ?, ?, ?, ?)",
-              (user_id, game_name, subject, score, level, time_spent))
-    conn.commit()
-    conn.close()
-
-def get_user_progress(user_id):
-    conn = sqlite3.connect('edu_game.db')
-    c = conn.cursor()
-    c.execute("SELECT game_name, subject, score, level, completed_at FROM game_progress WHERE user_id = ? ORDER BY completed_at DESC", (user_id,))
-    progress = c.fetchall()
-    conn.close()
-    return progress
-
-def get_class_progress(teacher_id):
-    conn = sqlite3.connect('edu_game.db')
-    c = conn.cursor()
-    c.execute("""
-        SELECT u.username, g.game_name, g.subject, AVG(g.score), COUNT(g.id)
-        FROM game_progress g
-        JOIN users u ON g.user_id = u.id
-        WHERE u.user_type = 'student'
-        GROUP BY u.username, g.game_name, g.subject
-    """)
-    progress = c.fetchall()
-    conn.close()
-    return progress
-
-# ML functions for analytics
-def analyze_student_performance(user_id):
-    conn = sqlite3.connect('edu_game.db')
-    df = pd.read_sql_query("SELECT game_name, subject, score, level, time_spent FROM game_progress WHERE user_id = ?", conn, params=(user_id,))
-    conn.close()
+    def process_hand_data(self, hand_landmarks):
+        """Extract and store hand landmark data for analytics"""
+        if hand_landmarks:
+            landmarks = []
+            for landmark in hand_landmarks.landmark:
+                landmarks.extend([landmark.x, landmark.y, landmark.z])
+            
+            self.landmark_history.append(landmarks)
+            self.hand_data.append({
+                'timestamp': time.time(),
+                'landmarks': landmarks,
+                'score': self.score
+            })
     
-    if df.empty:
-        return "No data available for analysis"
+    def update_realtime_plots(self):
+        """Update real-time visualization plots"""
+        if len(self.landmark_history) < 2:
+            return
+            
+        # Clear previous plots
+        self.ax1.clear()
+        self.ax2.clear()
+        self.ax3.clear()
+        self.ax4.clear()
+        
+        # Convert to numpy array
+        data = np.array(list(self.landmark_history))
+        
+        # Plot 1: Hand landmark movement over time
+        if len(data) > 10:
+            self.ax1.plot(data[-50:, 0], data[-50:, 1], 'b-', alpha=0.7)
+            self.ax1.scatter(data[-1, 0], data[-1, 1], c='red', s=50)
+            self.ax1.set_title('Hand Movement Pattern')
+            self.ax1.set_xlabel('X Coordinate')
+            self.ax1.set_ylabel('Y Coordinate')
+            self.ax1.grid(True, alpha=0.3)
+        
+        # Plot 2: Score progression
+        if len(self.hand_data) > 5:
+            scores = [data['score'] for data in self.hand_data[-50:]]
+            self.ax2.plot(range(len(scores)), scores, 'g-', linewidth=2)
+            self.ax2.set_title('Score Progression')
+            self.ax2.set_xlabel('Time Steps')
+            self.ax2.set_ylabel('Score')
+            self.ax2.grid(True, alpha=0.3)
+        
+        # Plot 3: Landmark velocity
+        if len(data) > 2:
+            velocity = np.sqrt(np.sum(np.diff(data[-20:], axis=0)**2, axis=1))
+            self.ax3.plot(velocity, 'orange', linewidth=2)
+            self.ax3.set_title('Hand Movement Velocity')
+            self.ax3.set_xlabel('Time Steps')
+            self.ax3.set_ylabel('Velocity')
+            self.ax3.grid(True, alpha=0.3)
+        
+        # Plot 4: 3D hand position distribution
+        if len(data) > 10:
+            self.ax4.scatter(data[-50:, 0], data[-50:, 1], c=data[-50:, 2], 
+                            cmap='viridis', alpha=0.6)
+            self.ax4.set_title('3D Position Distribution')
+            self.ax4.set_xlabel('X Coordinate')
+            self.ax4.set_ylabel('Y Coordinate')
+        
+        self.realtime_canvas.draw()
     
-    # Simple analysis
-    avg_score = df['score'].mean()
-    total_time = df['time_spent'].sum()
-    favorite_subject = df['subject'].mode()[0] if not df['subject'].mode().empty else "None"
+    def show_analytics(self):
+        """Show advanced analytics in a new window"""
+        if len(self.hand_data) < 10:
+            messagebox.showwarning("Warning", "Not enough data for analytics. Play the game first!")
+            return
+        
+        analytics_window = tk.Toplevel(self.root)
+        analytics_window.title("Advanced Hand Detection Analytics")
+        analytics_window.geometry("1200x800")
+        
+        # Create notebook for analytics tabs
+        analytics_notebook = ttk.Notebook(analytics_window)
+        analytics_notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Prepare data for ML algorithms
+        landmarks_data = []
+        scores = []
+        
+        for data_point in self.hand_data:
+            landmarks_data.append(data_point['landmarks'])
+            scores.append(data_point['score'])
+        
+        X = np.array(landmarks_data)
+        y = np.array(scores)
+        
+        # Tab 1: t-SNE Visualization
+        tsne_tab = ttk.Frame(analytics_notebook)
+        analytics_notebook.add(tsne_tab, text="t-SNE Clustering")
+        
+        fig1, ax1 = plt.subplots(figsize=(10, 8))
+        
+        # Apply t-SNE
+        tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, len(X)-1))
+        X_tsne = tsne.fit_transform(X)
+        
+        scatter = ax1.scatter(X_tsne[:, 0], X_tsne[:, 1], c=y, cmap='viridis', alpha=0.7)
+        ax1.set_title('t-SNE Visualization of Hand Landmarks')
+        ax1.set_xlabel('t-SNE Component 1')
+        ax1.set_ylabel('t-SNE Component 2')
+        plt.colorbar(scatter, ax=ax1, label='Score')
+        
+        canvas1 = FigureCanvasTkAgg(fig1, master=tsne_tab)
+        canvas1.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        canvas1.draw()
+        
+        # Tab 2: PCA Analysis
+        pca_tab = ttk.Frame(analytics_notebook)
+        analytics_notebook.add(pca_tab, text="PCA Analysis")
+        
+        fig2, (ax2, ax3) = plt.subplots(1, 2, figsize=(15, 6))
+        
+        # Apply PCA
+        pca = PCA(n_components=2)
+        X_pca = pca.fit_transform(X)
+        
+        ax2.scatter(X_pca[:, 0], X_pca[:, 1], c=y, cmap='coolwarm', alpha=0.7)
+        ax2.set_title('PCA of Hand Landmarks')
+        ax2.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.2%} variance)')
+        ax2.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.2%} variance)')
+        
+        # Explained variance ratio
+        pca_full = PCA().fit(X)
+        ax3.plot(range(1, len(pca_full.explained_variance_ratio_) + 1), 
+                np.cumsum(pca_full.explained_variance_ratio_), 'bo-')
+        ax3.set_title('Cumulative Explained Variance')
+        ax3.set_xlabel('Number of Components')
+        ax3.set_ylabel('Cumulative Explained Variance')
+        ax3.grid(True, alpha=0.3)
+        
+        canvas2 = FigureCanvasTkAgg(fig2, master=pca_tab)
+        canvas2.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        canvas2.draw()
+        
+        # Tab 3: K-means Clustering
+        kmeans_tab = ttk.Frame(analytics_notebook)
+        analytics_notebook.add(kmeans_tab, text="K-means Clustering")
+        
+        fig3, ax4 = plt.subplots(figsize=(10, 8))
+        
+        # Apply K-means
+        kmeans = KMeans(n_clusters=min(5, len(X)), random_state=42)
+        clusters = kmeans.fit_predict(X)
+        
+        scatter = ax4.scatter(X_pca[:, 0], X_pca[:, 1], c=clusters, cmap='tab10', alpha=0.7)
+        ax4.set_title('K-means Clustering of Hand Positions')
+        ax4.set_xlabel('PC1')
+        ax4.set_ylabel('PC2')
+        
+        canvas3 = FigureCanvasTkAgg(fig3, master=kmeans_tab)
+        canvas3.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        canvas3.draw()
+        
+        # Tab 4: Statistical Analysis
+        stats_tab = ttk.Frame(analytics_notebook)
+        analytics_notebook.add(stats_tab, text="Statistical Analysis")
+        
+        fig4, ((ax5, ax6), (ax7, ax8)) = plt.subplots(2, 2, figsize=(12, 10))
+        
+        # Landmark position distribution
+        landmark_means = np.mean(X, axis=0)
+        ax5.bar(range(len(landmark_means[:21])), landmark_means[:21])
+        ax5.set_title('Average Landmark Positions (First 21)')
+        ax5.set_xlabel('Landmark Index')
+        ax5.set_ylabel('Average Position')
+        
+        # Movement patterns
+        movement_magnitude = np.std(X, axis=0)
+        ax6.bar(range(len(movement_magnitude[:21])), movement_magnitude[:21])
+        ax6.set_title('Landmark Movement Variability')
+        ax6.set_xlabel('Landmark Index')
+        ax6.set_ylabel('Standard Deviation')
+        
+        # Score distribution
+        ax7.hist(scores, bins=20, alpha=0.7, color='skyblue', edgecolor='black')
+        ax7.set_title('Score Distribution')
+        ax7.set_xlabel('Score')
+        ax7.set_ylabel('Frequency')
+        
+        # Correlation heatmap (first 10 landmarks)
+        corr_matrix = np.corrcoef(X[:, :30].T)
+        im = ax8.imshow(corr_matrix, cmap='coolwarm', aspect='auto')
+        ax8.set_title('Landmark Correlation Matrix')
+        plt.colorbar(im, ax=ax8)
+        
+        fig4.tight_layout(pad=3.0)
+        canvas4 = FigureCanvasTkAgg(fig4, master=stats_tab)
+        canvas4.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        canvas4.draw()
     
-    analysis = f"""
-    Performance Analysis:
-    - Average Score: {avg_score:.2f}/100
-    - Total Time Spent: {total_time} minutes
-    - Favorite Subject: {favorite_subject}
-    
-    Recommendations:
-    - Focus on subjects where scores are lower
-    - Try to maintain consistent study time
-    - Revisit completed games to improve scores
-    """
-    
-    return analysis
-
-# CSS for drag and drop
-def local_css(file_name):
-    with open(file_name) as f:
-        st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
-
-# Create CSS file for drag and drop
-css_content = """
-.draggable {
-    cursor: move;
-    padding: 10px;
-    margin: 5px;
-    border: 2px solid #4CAF50;
-    border-radius: 5px;
-    background-color: #f9f9f9;
-    display: inline-block;
-}
-
-.dropzone {
-    min-height: 100px;
-    border: 2px dashed #ccc;
-    border-radius: 5px;
-    padding: 10px;
-    margin: 10px 0;
-}
-
-.dropzone.active {
-    border-color: #4CAF50;
-    background-color: #f0fff0;
-}
-
-.game-container {
-    border: 1px solid #ddd;
-    border-radius: 10px;
-    padding: 20px;
-    margin: 10px 0;
-    background-color: #f8f9fa;
-}
-
-.component-palette {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-bottom: 20px;
-}
-
-.lab-bench {
-    min-height: 200px;
-    border: 2px dashed #007bff;
-    border-radius: 5px;
-    padding: 15px;
-    margin: 15px 0;
-    background-color: #e9ecef;
-}
-"""
-
-with open("style.css", "w") as f:
-    f.write(css_content)
-
-local_css("style.css")
-
-# Main application
-def main():
-    # Initialize session state
-    if 'user' not in st.session_state:
-        st.session_state.user = None
-    if 'current_game' not in st.session_state:
-        st.session_state.current_game = None
-    if 'game_state' not in st.session_state:
-        st.session_state.game_state = None
-    
-    # Sidebar for navigation
-    st.sidebar.title("🎓 Rural EduGame Platform")
-    
-    if st.session_state.user is None:
-        # Login/Signup section
-        auth_option = st.sidebar.selectbox("Select Option", ["Login", "Sign Up"])
-        
-        if auth_option == "Login":
-            username = st.sidebar.text_input("Username")
-            password = st.sidebar.text_input("Password", type="password")
-            if st.sidebar.button("Login"):
-                user = verify_user(username, password)
-                if user:
-                    st.session_state.user = user
-                    st.rerun()
-                else:
-                    st.sidebar.error("Invalid username or password")
-        
-        else:  # Sign Up
-            st.sidebar.subheader("Create Account")
-            new_username = st.sidebar.text_input("Choose Username")
-            new_password = st.sidebar.text_input("Choose Password", type="password")
-            user_type = st.sidebar.selectbox("User Type", ["student", "teacher"])
-            grade = st.sidebar.selectbox("Grade", range(6, 13)) if user_type == "student" else None
-            school = st.sidebar.text_input("School Name")
+    def game_loop(self):
+        """Main game loop running in separate thread"""
+        while self.is_running and self.cap.isOpened():
+            ret, frame = self.cap.read()
+            if not ret:
+                break
             
-            if st.sidebar.button("Create Account"):
-                if create_user(new_username, new_password, user_type, grade, school):
-                    st.sidebar.success("Account created successfully. Please login.")
-                else:
-                    st.sidebar.error("Username already exists")
-    
-    else:
-        # User is logged in
-        user_id, username, _, user_type, grade, school, _ = st.session_state.user
-        
-        st.sidebar.write(f"Welcome, {username}!")
-        st.sidebar.write(f"Type: {user_type.capitalize()}")
-        if user_type == "student":
-            st.sidebar.write(f"Grade: {grade}")
-        st.sidebar.write(f"School: {school}")
-        
-        if st.sidebar.button("Logout"):
-            st.session_state.user = None
-            st.session_state.current_game = None
-            st.session_state.game_state = None
-            st.rerun()
-        
-        # Navigation based on user type
-        if user_type == "student":
-            menu_options = ["Dashboard", "Circuit Builder", "Physics Lab", "Chemistry Lab", 
-                           "Geography Explorer", "Math Adventure", "My Progress"]
-        else:
-            menu_options = ["Dashboard", "Class Analytics", "Student Reports"]
-        
-        choice = st.sidebar.selectbox("Menu", menu_options)
-        
-        # Main content area
-        if choice == "Dashboard":
-            st.title("🎓 Gamified Learning Platform for Rural Education")
-            st.subheader("Welcome to your personalized learning dashboard!")
+            # Flip frame horizontally for mirror effect
+            frame = cv2.flip(frame, 1)
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             
-            col1, col2, col3 = st.columns(3)
+            # Process frame with MediaPipe Hands
+            results = self.hands.process(rgb_frame)
             
-            with col1:
-                st.info("📚 Subjects Covered")
-                st.write("- Mathematics")
-                st.write("- Physics")
-                st.write("- Chemistry")
-                st.write("- Geography")
+            # Generate targets if needed
+            if len(self.targets) < 3 and random.random() < 0.02:
+                self.targets.append(self.generate_target(frame.shape))
             
-            with col2:
-                st.info("🎮 Learning Games")
-                st.write("- Circuit Builder (Physics)")
-                st.write("- Physics Lab (Physics)")
-                st.write("- Chemistry Lab (Chemistry)")
-                st.write("- Geography Explorer (Geography)")
-                st.write("- Math Adventure (Mathematics)")
+            # Draw targets
+            for target in self.targets:
+                cv2.circle(frame, (target['x'], target['y']), 
+                          target['radius'], target['color'], -1)
+                cv2.circle(frame, (target['x'], target['y']), 
+                          target['radius'], (255, 255, 255), 2)
             
-            with col3:
-                st.info("🏆 Your Progress")
-                progress = get_user_progress(user_id)
-                if progress:
-                    st.write(f"Games Completed: {len(progress)}")
-                    avg_score = sum(p[2] for p in progress) / len(progress)
-                    st.write(f"Average Score: {avg_score:.1f}%")
-                else:
-                    st.write("No games completed yet")
-            
-            if user_type == "student":
-                st.subheader("Recommended For You")
-                rec_col1, rec_col2 = st.columns(2)
-                
-                with rec_col1:
-                    st.write("**Based on your grade level:**")
-                    if grade <= 8:
-                        st.write("- Try Circuit Builder to learn about electricity")
-                        st.write("- Explore the Chemistry Lab")
-                    else:
-                        st.write("- Challenge yourself with Physics Lab")
-                        st.write("- Test your knowledge with Math Adventure")
-                
-                with rec_col2:
-                    st.write("**Popular among students:**")
-                    st.write("- Circuit Builder - build working circuits")
-                    st.write("- Chemistry Lab - create chemical compounds")
-        
-        elif choice == "Circuit Builder":
-            st.title("🔌 Circuit Builder")
-            st.write("Build electrical circuits by dragging components to the workspace!")
-            
-            if st.session_state.current_game != "Circuit Builder":
-                st.session_state.current_game = "Circuit Builder"
-                st.session_state.game_state = CircuitBuilder(grade)
-                st.rerun()
-            
-            game = st.session_state.game_state
-            
-            st.markdown("### Available Components")
-            st.markdown("<div class='component-palette'>", unsafe_allow_html=True)
-            
-            cols = st.columns(len(game.components))
-            for i, component in enumerate(game.components):
-                with cols[i]:
-                    if st.button(f"{component['image']} {component['name']}", key=f"comp_{component['id']}"):
-                        game.add_component(component['id'])
-                        st.rerun()
-                    st.caption(component['description'])
-            
-            st.markdown("</div>", unsafe_allow_html=True)
-            
-            st.markdown("### Your Circuit")
-            st.markdown("<div class='lab-bench'>", unsafe_allow_html=True)
-            
-            if game.user_circuit:
-                circuit_display = " → ".join([next(comp['image'] for comp in game.components if comp['id'] == c) for c in game.user_circuit])
-                st.markdown(f"<h3 style='text-align: center;'>{circuit_display}</h3>", unsafe_allow_html=True)
-                
-                # Show component names
-                component_names = " → ".join([next(comp['name'] for comp in game.components if comp['id'] == c) for c in game.user_circuit])
-                st.markdown(f"<p style='text-align: center;'>{component_names}</p>", unsafe_allow_html=True)
-            else:
-                st.info("No components added yet. Click on components above to build your circuit!")
-            
-            st.markdown("</div>", unsafe_allow_html=True)
-            
-            if st.button("Test Circuit"):
-                score = game.get_score()
-                if score == 100:
-                    st.success("🎉 Congratulations! Your circuit works perfectly!")
-                    st.balloons()
+            # Process hand detection
+            if results.multi_hand_landmarks:
+                for hand_landmarks in results.multi_hand_landmarks:
+                    # Draw hand landmarks
+                    self.mp_drawing.draw_landmarks(
+                        frame,
+                        hand_landmarks,
+                        self.mp_hands.HAND_CONNECTIONS,
+                        self.mp_drawing_styles.get_default_hand_landmarks_style(),
+                        self.mp_drawing_styles.get_default_hand_connections_style()
+                    )
                     
-                    # Visual effect for working circuit
-                    if "battery" in game.user_circuit and "bulb" in game.user_circuit:
-                        st.markdown("<h2 style='text-align: center; color: yellow;'>💡 Light Bulb Glowing!</h2>", unsafe_allow_html=True)
-                else:
-                    st.warning(f"Your circuit is {score}% correct. Try again!")
-                
-                save_game_progress(user_id, "Circuit Builder", "Physics", score, grade, 10)
-                
-                if st.button("Build New Circuit"):
-                    st.session_state.game_state = CircuitBuilder(grade)
-                    st.rerun()
-        
-        elif choice == "Physics Lab":
-            st.title("🔬 Physics Laboratory")
-            st.write("Conduct physics experiments by setting up equipment correctly!")
-            
-            if st.session_state.current_game != "Physics Lab":
-                st.session_state.current_game = "Physics Lab"
-                st.session_state.game_state = PhysicsLab(grade)
-                st.rerun()
-            
-            game = st.session_state.game_state
-            experiment = game.experiments[game.current_experiment]
-            
-            st.markdown(f"### Experiment: {experiment['name']}")
-            st.write(experiment['description'])
-            
-            st.markdown("### Available Equipment")
-            st.markdown("<div class='component-palette'>", unsafe_allow_html=True)
-            
-            cols = st.columns(len(game.equipment))
-            for i, equipment in enumerate(game.equipment):
-                with cols[i]:
-                    if st.button(f"{equipment['image']} {equipment['name']}", key=f"equip_{equipment['id']}"):
-                        game.add_equipment(equipment['id'])
-                        st.rerun()
-                    st.caption(equipment['description'])
-            
-            st.markdown("</div>", unsafe_allow_html=True)
-            
-            st.markdown("### Your Experiment Setup")
-            st.markdown("<div class='lab-bench'>", unsafe_allow_html=True)
-            
-            if game.user_setup:
-                setup_display = " + ".join([next(equip['image'] for equip in game.equipment if equip['id'] == e) for e in game.user_setup])
-                st.markdown(f"<h3 style='text-align: center;'>{setup_display}</h3>", unsafe_allow_html=True)
-                
-                # Show equipment names
-                equipment_names = " + ".join([next(equip['name'] for equip in game.equipment if equip['id'] == e) for e in game.user_setup])
-                st.markdown(f"<p style='text-align: center;'>{equipment_names}</p>", unsafe_allow_html=True)
-            else:
-                st.info("No equipment added yet. Click on equipment above to set up your experiment!")
-            
-            st.markdown("</div>", unsafe_allow_html=True)
-            
-            if st.button("Run Experiment"):
-                score = game.get_score()
-                if score == 100:
-                    st.success("🎉 Congratulations! Your experiment was successful!")
-                    st.balloons()
+                    # Check for target collisions
+                    self.check_target_collision(hand_landmarks, frame.shape)
                     
-                    # Show experiment result visualization
-                    if game.current_experiment == 0:  # Hooke's Law
-                        st.line_chart(pd.DataFrame({
-                            'Force (N)': [1, 2, 3, 4, 5],
-                            'Extension (cm)': [2, 4, 6, 8, 10]
-                        }))
-                        st.caption("Hooke's Law: Force vs Extension")
-                    
-                else:
-                    st.warning(f"Your experiment is {score}% correct. Try again!")
-                
-                save_game_progress(user_id, "Physics Lab", "Physics", score, grade, 15)
-                
-                if score == 100 and game.next_experiment():
-                    st.info("Moving to the next experiment!")
-                    st.rerun()
-                
-                if st.button("Reset Experiment"):
-                    st.session_state.game_state = PhysicsLab(grade)
-                    st.rerun()
-        
-        elif choice == "Chemistry Lab":
-            st.title("🧪 Chemistry Laboratory")
-            st.write("Create chemical compounds by combining elements!")
+                    # Process hand data for analytics
+                    self.process_hand_data(hand_landmarks)
             
-            if st.session_state.current_game != "Chemistry Lab":
-                st.session_state.current_game = "Chemistry Lab"
-                st.session_state.game_state = ChemistryLab(grade)
-                st.rerun()
+            # Convert frame for display
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            img = Image.fromarray(frame)
+            imgtk = ImageTk.PhotoImage(image=img)
             
-            game = st.session_state.game_state
-            compound = game.compounds[game.current_reaction]
+            # Update camera display in main thread
+            self.root.after(0, self.update_camera_display, imgtk)
             
-            st.markdown(f"### Compound: {compound['name']}")
-            st.write(compound['description'])
+            # Update real-time plots
+            if len(self.landmark_history) > 0:
+                self.root.after(0, self.update_realtime_plots)
             
-            st.markdown("### Available Elements")
-            st.markdown("<div class='component-palette'>", unsafe_allow_html=True)
-            
-            cols = st.columns(len(game.elements))
-            for i, element in enumerate(game.elements):
-                with cols[i]:
-                    if st.button(f"{element['image']} {element['name']}", key=f"elem_{element['id']}"):
-                        game.add_element(element['id'])
-                        st.rerun()
-                    st.caption(element['description'])
-            
-            st.markdown("</div>", unsafe_allow_html=True)
-            
-            st.markdown("### Your Chemical Formula")
-            st.markdown("<div class='lab-bench'>", unsafe_allow_html=True)
-            
-            if game.user_elements:
-                formula_display = " + ".join([next(elem['image'] for elem in game.elements if elem['id'] == e) for e in game.user_elements])
-                st.markdown(f"<h3 style='text-align: center;'>{formula_display}</h3>", unsafe_allow_html=True)
-                
-                # Show element symbols
-                element_symbols = " + ".join(game.user_elements)
-                st.markdown(f"<p style='text-align: center;'>{element_symbols}</p>", unsafe_allow_html=True)
-            else:
-                st.info("No elements added yet. Click on elements above to create your compound!")
-            
-            st.markdown("</div>", unsafe_allow_html=True)
-            
-            if st.button("Create Compound"):
-                score = game.get_score()
-                if score == 100:
-                    st.success("🎉 Congratulations! You created the correct compound!")
-                    st.balloons()
-                    
-                    # Show compound visualization
-                    if compound['name'] == "Water Formation":
-                        st.markdown("<h3 style='text-align: center; color: blue;'>H₂O - Water</h3>", unsafe_allow_html=True)
-                        st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/1/10/Water_molecule_3D.svg/1200px-Water_molecule_3D.svg.png", 
-                                width=200, caption="Water Molecule")
-                    
-                else:
-                    st.warning(f"Your compound is {score}% correct. Try again!")
-                
-                save_game_progress(user_id, "Chemistry Lab", "Chemistry", score, grade, 15)
-                
-                if score == 100 and game.next_reaction():
-                    st.info("Moving to the next compound!")
-                    st.rerun()
-                
-                if st.button("Reset Reaction"):
-                    st.session_state.game_state = ChemistryLab(grade)
-                    st.rerun()
-        
-        elif choice == "Geography Explorer":
-            st.title("🌍 Geography Explorer")
-            st.write("Test your knowledge of countries, capitals, and landmarks!")
-            
-            if st.session_state.current_game != "Geography Explorer":
-                st.session_state.current_game = "Geography Explorer"
-                st.session_state.game_state = GeographyExplorer(grade)
-                st.rerun()
-            
-            game = st.session_state.game_state
-            
-            st.markdown("### Select Game Mode")
-            mode = st.radio("Choose mode:", ["Countries to Capitals", "Capitals to Countries", "Countries to Landmarks"])
-            
-            if mode == "Countries to Capitals":
-                game.set_mode("countries")
-                st.markdown("#### Match Countries with their Capitals")
-                
-                for country in game.countries:
-                    capital_options = [""] + list(game.capitals.values())
-                    selected = st.selectbox(f"Capital of {country}", options=capital_options, 
-                                          key=f"cap_{country}")
-                    game.add_answer(country, selected)
-            
-            elif mode == "Capitals to Countries":
-                game.set_mode("capitals")
-                st.markdown("#### Match Capitals with their Countries")
-                
-                for capital in game.capitals.values():
-                    country_options = [""] + list(game.capitals.keys())
-                    selected = st.selectbox(f"Country for {capital}", options=country_options,
-                                          key=f"country_{capital}")
-                    game.add_answer(capital, selected)
-            
-            else:  # Countries to Landmarks
-                game.set_mode("landmarks")
-                st.markdown("#### Match Countries with their Famous Landmarks")
-                
-                for country in game.countries:
-                    landmark_options = [""] + list(game.landmarks.values())
-                    selected = st.selectbox(f"Landmark in {country}", options=landmark_options,
-                                          key=f"land_{country}")
-                    game.add_answer(country, selected)
-            
-            if st.button("Check Answers"):
-                score = game.get_score()
-                if score == 100:
-                    st.success("🎉 Perfect! You know your geography!")
-                    st.balloons()
-                else:
-                    st.warning(f"You scored {score}%. Good try!")
-                
-                save_game_progress(user_id, "Geography Explorer", "Geography", score, grade, 10)
-                
-                if st.button("Play Again"):
-                    st.session_state.game_state = GeographyExplorer(grade)
-                    st.rerun()
-        
-        elif choice == "Math Adventure":
-            st.title("🧮 Math Adventure")
-            st.write("Solve mathematical problems and challenges!")
-            
-            if st.session_state.current_game != "Math Adventure":
-                st.session_state.current_game = "Math Adventure"
-                st.session_state.game_state = MathAdventure(grade)
-                st.rerun()
-            
-            game = st.session_state.game_state
-            problem = game.problems[game.current_problem]
-            
-            st.markdown(f"### Problem {game.current_problem + 1} of {len(game.problems)}")
-            st.markdown(f"**{problem['question']}**")
-            st.caption(f"Hint: {problem['hint']}")
-            
-            answer = st.text_input("Your answer:", key=f"math_prob_{game.current_problem}")
-            
-            if answer:
-                game.user_answers[str(game.current_problem)] = answer
-                
-                if st.button("Check Answer"):
-                    if game.check_answer(answer):
-                        st.success("✅ Correct! Well done!")
-                        
-                        if game.next_problem():
-                            st.info("Moving to the next problem!")
-                            st.rerun()
-                        else:
-                            # All problems completed
-                            score = game.get_score()
-                            st.success(f"🎉 You completed all problems with a score of {score}%!")
-                            save_game_progress(user_id, "Math Adventure", "Mathematics", score, grade, 15)
-                            
-                            if st.button("Play Again"):
-                                st.session_state.game_state = MathAdventure(grade)
-                                st.rerun()
-                    else:
-                        st.error("❌ Incorrect. Try again!")
-        
-        elif choice == "My Progress":
-            st.title("📊 My Learning Progress")
-            progress = get_user_progress(user_id)
-            
-            if progress:
-                st.subheader("Game Performance")
-                df = pd.DataFrame(progress, columns=["Game", "Subject", "Score", "Level", "Date"])
-                
-                # Show recent activity
-                st.dataframe(df.head(10))
-                
-                # Show charts
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.subheader("Scores by Subject")
-                    subject_scores = df.groupby("Subject")["Score"].mean()
-                    st.bar_chart(subject_scores)
-                
-                with col2:
-                    st.subheader("Progress Over Time")
-                    df['Date'] = pd.to_datetime(df['Date'])
-                    time_series = df.set_index('Date')['Score']
-                    st.line_chart(time_series)
-                
-                # Performance analysis
-                st.subheader("Performance Analysis")
-                analysis = analyze_student_performance(user_id)
-                st.write(analysis)
-            else:
-                st.info("You haven't completed any games yet. Play some games to see your progress here!")
-        
-        elif choice == "Class Analytics" and user_type == "teacher":
-            st.title("👨‍🏫 Class Analytics")
-            progress = get_class_progress(user_id)
-            
-            if progress:
-                df = pd.DataFrame(progress, columns=["Student", "Game", "Subject", "Avg Score", "Games Played"])
-                
-                st.subheader("Overall Class Performance")
-                st.dataframe(df)
-                
-                st.subheader("Average Scores by Subject")
-                subject_avg = df.groupby("Subject")["Avg Score"].mean()
-                st.bar_chart(subject_avg)
-                
-                st.subheader("Student Engagement")
-                engagement = df.groupby("Student")["Games Played"].sum()
-                st.bar_chart(engagement)
-            else:
-                st.info("No student data available yet.")
-        
-        elif choice == "Student Reports" and user_type == "teacher":
-            st.title("📝 Individual Student Reports")
-            
-            # Get list of students
-            conn = sqlite3.connect('edu_game.db')
-            c = conn.cursor()
-            c.execute("SELECT id, username, grade FROM users WHERE user_type = 'student'")
-            students = c.fetchall()
-            conn.close()
-            
-            if students:
-                student_options = [f"{s[1]} (Grade {s[2]})" for s in students]
-                selected_student = st.selectbox("Select Student", student_options)
-                
-                if selected_student:
-                    student_id = students[student_options.index(selected_student)][0]
-                    progress = get_user_progress(student_id)
-                    
-                    if progress:
-                        st.subheader(f"Progress Report for {selected_student}")
-                        df = pd.DataFrame(progress, columns=["Game", "Subject", "Score", "Level", "Date"])
-                        st.dataframe(df)
-                        
-                        # Show analysis
-                        analysis = analyze_student_performance(student_id)
-                        st.write(analysis)
-                    else:
-                        st.info("This student hasn't completed any games yet.")
-            else:
-                st.info("No students registered yet.")
+            # Control frame rate
+            time.sleep(0.03)
+    
+    def update_camera_display(self, imgtk):
+        """Update camera display in main thread"""
+        self.camera_label.imgtk = imgtk
+        self.camera_label.configure(image=imgtk)
+    
+    def run(self):
+        """Start the application"""
+        try:
+            self.root.mainloop()
+        finally:
+            if self.cap:
+                self.cap.release()
+            self.hands.close()
 
 if __name__ == "__main__":
-    main()
+    # Check dependencies
+    try:
+        game = HandDetectionGame()
+        print("Starting Hand Detection Game...")
+        print("Features:")
+        print("- Real-time hand detection using MediaPipe")
+        print("- Interactive target collection game")
+        print("- Real-time data visualization")
+        print("- Advanced ML analytics (t-SNE, PCA, K-means)")
+        print("- Statistical analysis of hand movements")
+        game.run()
+    except ImportError as e:
+        print(f"Missing dependency: {e}")
+        print("Please install required packages:")
+        print("pip install opencv-python mediapipe matplotlib pandas scikit-learn seaborn pillow")
+    except Exception as e:
+        print(f"Error: {e}")
